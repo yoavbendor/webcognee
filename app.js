@@ -24,7 +24,7 @@ function dataBase() {
 }
 const BASE = dataBase();
 const $ = (id) => document.getElementById(id);
-const worker = new Worker('search-worker.js?v=4');
+const worker = new Worker('search-worker.js?v=5');
 worker.onerror = (e) => status('The search worker failed to start: ' + (e.message || 'unknown error'), true);
 const pending = new Map();
 let nextId = 1;
@@ -139,7 +139,7 @@ function llmCall(msg, onToken) {
 }
 
 function startLlm() {
-  llm = new Worker('llm-worker.js?v=4', { type: 'module' });
+  llm = new Worker('llm-worker.js?v=5', { type: 'module' });
   llm.onerror = (e) => answerError(new Error('The answering worker failed to start: ' + (e.message || 'unknown')));
   llm.onmessage = (ev) => {
     const m = ev.data;
