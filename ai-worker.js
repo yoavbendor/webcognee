@@ -12,7 +12,7 @@
 //   {type:'ask', id, messages, maxTokens}       -> {type:'token', id, text} as the answer streams, then {type:'done', id}
 // and {type:'stage', what, ...} for the debug log, each with this worker's WebAssembly memories.
 
-import './memprobe.js?v=9';
+import './memprobe.js?v=10';
 
 const TRANSFORMERS = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/dist/transformers.min.js';
 

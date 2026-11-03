@@ -59,9 +59,10 @@
   W.Memory.prototype = OrigMemory.prototype;
 
   globalThis.wasmMem = {
-    // [{name, mb, peakMb}] of every memory seen in this context, and their total
+    // [{name, mb, peakMb}] of every memory seen in this context, and their total. A memory with no pages and no
+    // room to grow (onnxruntime makes one to test for shared memory) is left out.
     snapshot() {
-      const list = seen.map((s) => {
+      const list = seen.filter((s) => s.memory.buffer.byteLength > 0 || s.peak > 0 || !/max=0[,)]/.test(s.name)).map((s) => {
         const b = s.memory.buffer.byteLength;
         if (b > s.peak) s.peak = b;
         return { name: s.name, mb: Math.round(b / 1048576), peakMb: Math.round(s.peak / 1048576) };

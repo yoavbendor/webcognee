@@ -7,7 +7,7 @@
 //                     onnxruntime and one WebAssembly memory
 // The page itself runs no WebAssembly. Everything worth knowing about a crash goes to the debug log (debug.js).
 
-const BUILD = { version: '0.9', date: '2026-11-03', note: 'one onnxruntime for embedder and answer; measured memory budget; small model on phones' };
+const BUILD = { version: '0.9.1', date: '2026-11-03', note: 'one onnxruntime for embedder and answer; measured memory budget; small model on phones' };
 
 const D = window.wlDebug || { log() {}, span() { return () => {}; }, attachWorker() {}, mem() {}, showPanel() {} };
 const $ = (id) => document.getElementById(id);
@@ -112,7 +112,7 @@ function track(m) {
   }
 }
 
-const search = new Worker('search-worker.js?v=9');
+const search = new Worker('search-worker.js?v=10');
 D.attachWorker(search, 'search');
 search.onerror = (e) => status('The search worker failed to start: ' + (e.message || 'unknown error'), true);
 let initDone;
@@ -151,7 +151,7 @@ function aiCall(msg, onToken) {
 
 function startAi() {
   D.log('ai.stage', { what: 'worker.create' });
-  ai = new Worker('ai-worker.js?v=9', { type: 'module' });
+  ai = new Worker('ai-worker.js?v=10', { type: 'module' });
   D.attachWorker(ai, 'ai');
   ai.onerror = (e) => {
     const err = new Error('The AI worker failed to start: ' + (e.message || 'unknown'));
