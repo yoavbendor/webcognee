@@ -43,6 +43,27 @@
       Code: <a href="https://github.com/yoavbendor/webcognee">webcognee</a> (Apache-2.0),
       <a href="LICENSE-NOTICES.md">third-party notices</a>.</p>
   </footer>
-  <script type="module" src="app.js"></script>
+  <script>
+    // A classic script, so it runs even where the module below cannot: it reports errors the module never caught
+    // and, if the module never starts, says so instead of leaving "Loading…" on screen.
+    (function () {
+      function show(text) {
+        var el = document.getElementById('status');
+        el.textContent = text;
+        el.className = 'fine error';
+      }
+      window.addEventListener('error', function (e) { show('Error: ' + (e.message || e.type)); });
+      window.addEventListener('unhandledrejection', function (e) {
+        show('Error: ' + ((e.reason && e.reason.message) || e.reason));
+      });
+      setTimeout(function () {
+        if (!window.webcogneeStarted) {
+          show('The app did not start. This browser may lack ES modules or WebAssembly, or a content blocker stopped ' +
+            'a script. Try a current Chrome, Edge, Firefox or Safari.');
+        }
+      }, 15000);
+    })();
+  </script>
+  <script type="module" src="app.js?v=2"></script>
 </body>
 </html>

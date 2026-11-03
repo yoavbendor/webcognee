@@ -4,11 +4,14 @@
 // The page: embeds the question in the browser (transformers.js, bge-small-en-v1.5, the model the passages were
 // embedded with) and hands the vector to search-worker.js, which reads the Lance tables by HTTP Range.
 
-import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/dist/transformers.min.js';
+// Loaded with import() inside main(), not a static import: a static import that fails (a blocked CDN, a browser
+// that cannot run the bundle) stops this whole module before it can say why, and the page just sits there.
+const TRANSFORMERS = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/dist/transformers.min.js';
 
 const BASE = new URL('data/wiki/', location.href).href;
 const $ = (id) => document.getElementById(id);
-const worker = new Worker('search-worker.js');
+const worker = new Worker('search-worker.js?v=2');
+worker.onerror = (e) => status('The search worker failed to start: ' + (e.message || 'unknown error'), true);
 const pending = new Map();
 let nextId = 1;
 let meta = null;
@@ -36,6 +39,7 @@ worker.onmessage = (ev) => {
 };
 
 function status(text, error) {
+  window.webcogneeStarted = true;  // the watchdog in index.html stands down
   const el = $('status');
   el.textContent = text;
   el.classList.toggle('error', !!error);
@@ -104,16 +108,31 @@ async function showArticle(id) {
 }
 
 async function main() {
-  meta = await (await fetch(BASE + 'meta.json')).json();
+  status('Reading the corpus description…');
+  const res = await fetch(BASE + 'meta.json');
+  if (!res.ok) throw new Error(`data/wiki/meta.json: HTTP ${res.status}`);
+  meta = await res.json();
   $('corpus').textContent = `${meta.articles} articles · ${meta.chunks} passages · ${meta.links} links between them`;
-  status('Opening the tables…');
+  status('Opening the tables and loading the embedding model…');
   worker.postMessage({ type: 'init', base: BASE });
+  let transformers;
+  try {
+    transformers = await import(TRANSFORMERS);
+  } catch (err) {
+    throw new Error('Could not load transformers.js from cdn.jsdelivr.net (blocked, offline, or this browser cannot ' +
+      'run it): ' + ((err && err.message) || err));
+  }
+  const { pipeline, env } = transformers;
   env.allowLocalModels = false;
-  const [init, extractor] = await Promise.all([
-    initReady,
-    pipeline('feature-extraction', meta.model.queries, { dtype: 'q8',
-      progress_callback: (p) => { if (p.status === 'progress' && p.file && p.file.endsWith('.onnx')) status(`Loading the embedding model… ${Math.round(p.progress)}%`); } }),
-  ]);
+  const model = pipeline('feature-extraction', meta.model.queries, { dtype: 'q8',
+    progress_callback: (p) => {
+      if (p.status === 'progress' && p.file && p.file.endsWith('.onnx')) {
+        status(`Loading the embedding model (about 34 MB, once)… ${Math.round(p.progress)}%`);
+      }
+    } }).catch((err) => {
+    throw new Error('Could not load the embedding model from huggingface.co: ' + ((err && err.message) || err));
+  });
+  const [init, extractor] = await Promise.all([initReady, model]);
   if (!init.ok) throw new Error(init.error);
   embed = extractor;
   $('q').disabled = false;
