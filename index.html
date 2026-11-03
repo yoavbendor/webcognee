@@ -30,6 +30,25 @@
       <label>Partitions read per question <input id="nprobe" type="number" min="1" max="64" value="6"></label>
     </details>
     <p id="status" class="fine" role="status">Loading…</p>
+    <section id="answer-box" hidden>
+      <div class="answer-head">
+        <button id="ask" type="button">Answer from these passages</button>
+        <label class="fine"><input id="auto-answer" type="checkbox"> answer every question</label>
+      </div>
+      <details class="knobs">
+        <summary>Answer settings</summary>
+        <label>Model
+          <select id="model">
+            <option value="onnx-community/Qwen2.5-0.5B-Instruct">Qwen2.5 0.5B Instruct (~480–510 MB)</option>
+            <option value="HuggingFaceTB/SmolLM2-360M-Instruct">SmolLM2 360M Instruct (~270–365 MB, faster, weaker)</option>
+          </select></label>
+        <label>Passages given to it <input id="passages" type="number" min="1" max="10" value="3"></label>
+      </details>
+      <div id="answer" aria-live="polite"></div>
+      <p id="answer-sources" class="fine"></p>
+      <p id="answer-stats" class="fine">A small language model writes an answer from the passages below, on this
+        device: it downloads once (several hundred MB, then cached) and nothing leaves the browser.</p>
+    </section>
     <ol id="results"></ol>
     <section id="article" hidden></section>
   </main>

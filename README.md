@@ -3,7 +3,10 @@
 Your own knowledge, searchable in your pocket: semantic search and (next) a graph of what links to what, running
 **entirely in the browser** from static files. No server, no account; a phone on a cellular link is enough.
 
-**Live:** https://yoavbendor.github.io/webcognee/ (enable GitHub Pages on `main`, root)
+**Live:** https://yoavbendor.github.io/webcognee/
+
+On GitHub Pages the page reads the tables through raw.githubusercontent.com. When a request accepts gzip, which
+Safari and Firefox do, Pages' CDN answers byte-range requests with slices of the gzip-compressed file.
 
 The first corpus is a **pocket Wikipedia**, the first 300 articles of the 2026-10-01 English dump, 6k passages.
 The goal is your own chats (Cursor, Codex, Claude, WhatsApp), built into a cognee-style memory graph. Wikipedia
@@ -35,6 +38,21 @@ Wikipedia dump prefix (bz2)                           question
   are embedded with its ONNX export `Xenova/bge-small-en-v1.5`, so both live in one vector space. `tools/test_page.cjs`
   checks that the two agree to cosine ≥ 0.98.
 
+## Answers on the device
+
+Under the results, **Answer from these passages** writes a short answer from the top passages (3 by default) with a
+small instruct model, run by transformers.js in a module worker (`llm-worker.js`). Nothing leaves the browser.
+- **Backend:** WebGPU when the browser has it (q4f16, or q4 without `shader-f16`); otherwise WebAssembly on the CPU (q8).
+- **Models:** Qwen2.5-0.5B-Instruct by default (~480–510 MB) or SmolLM2-360M-Instruct (~270–365 MB). Either
+  downloads once, on the first answer, and stays in the browser cache.
+- **Sources:** small models cite unreliably, so the passages an answer was written from are always listed under it,
+  linked to the numbered results. Any `[n]` the model writes is linked too.
+- **Speed:** in this repository's sandbox (4 slow cores, no GPU) the WebAssembly path takes about 35 s to the first
+  word and produces 0.6 tokens/s. A phone with WebGPU is much faster; that is the case the feature is for.
+
+`node tools/test_answer.cjs <nanolance>/wasm/test/range_server.py` checks it end to end: search, download the model,
+stream an answer that names the expected article, and list its sources.
+
 ## Build the corpus
 
 ```sh
@@ -62,7 +80,7 @@ API. It drives the page in headless Chromium and checks:
 
 ## Next
 
-1. Chat with the corpus: a small in-browser LLM (WebLLM) answering from the retrieved passages.
+1. Follow-up questions in a conversation, and a smaller download for the answer model.
 2. Your own chats as the corpus (Cursor/Codex/Claude/WhatsApp exports), built into a cognee memory graph with
    [cppognee](https://github.com/yoavbendor/cppognee) on nanolance. cognee's LanceDB adapter already runs unchanged
    on nanolance.

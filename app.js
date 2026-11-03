@@ -92,18 +92,131 @@ async function runSearch(query) {
   status('Searching…');
   const nprobe = Number($('nprobe').value);
   const r = await call({ type: 'search', vector, k: 10, nprobe });
+  last = { query, hits: r.hits };
   const list = $('results');
   list.replaceChildren();
-  for (const h of r.hits) {
-    list.append(el('li', { class: 'hit' },
+  r.hits.forEach((h, i) => {
+    list.append(el('li', { class: 'hit', id: 'hit-' + (i + 1) },
+      el('span', { class: 'num' }, `[${i + 1}] `),
       el('button', { class: 'title', onclick: () => showArticle(h.article_id) }, h.title),
       h.section ? el('span', { class: 'section' }, ' › ' + h.section) : null,
       el('p', {}, snippet(h.text, query)),
       el('span', { class: 'score' }, 'similarity ' + h.score.toFixed(3))));
-  }
+  });
+  $('answer-box').hidden = false;
+  $('answer').replaceChildren();
+  $('answer-sources').replaceChildren();
+  $('answer-stats').textContent = '';
+  if ($('auto-answer').checked) answer().catch((err) => answerError(err));
   status(`${r.hits.length} passages · embedded in ${Math.round(t1 - t0)} ms · searched ${r.scanned} of ` +
     `${meta.chunks} passages in ${r.probed} partitions, ${r.stats.requests} range requests, ${kb(r.stats.bytes)}, ` +
     `${Math.round(r.ms)} ms`);
+}
+
+// ---------------------------------------------------------------------------------------------- answers
+
+let last = null;
+let llm = null;          // the module worker, started on the first answer
+let llmModel = null;     // the model it has loaded
+const llmPending = new Map();
+
+const SYSTEM = 'You are a helpful assistant. Answer questions from the Wikipedia passages the user gives you, ' +
+  'and cite the passage numbers you used, like [1].';
+
+// Small models follow a prompt that states the question before the passages and asks it again after them.
+function prompt(query, hits) {
+  const context = hits.map((h, i) => `[${i + 1}] (${h.title}${h.section ? ', ' + h.section : ''}) ${h.text}`).join('\n\n');
+  return `Question: ${query}\n\nPassages:\n\n${context}\n\nUsing the passages above, answer the question ` +
+    `"${query}" in one to three sentences, citing passages like [1]. If they do not answer it, say so.`;
+}
+
+function llmCall(msg, onToken) {
+  return new Promise((resolve, reject) => {
+    const id = nextId++;
+    llmPending.set(id, { resolve, reject, onToken });
+    llm.postMessage({ ...msg, id });
+  });
+}
+
+function startLlm() {
+  llm = new Worker('llm-worker.js?v=4', { type: 'module' });
+  llm.onerror = (e) => answerError(new Error('The answering worker failed to start: ' + (e.message || 'unknown')));
+  llm.onmessage = (ev) => {
+    const m = ev.data;
+    if (m.type === 'progress') {
+      const mb = (n) => Math.round((n || 0) / 1e6);
+      $('answer-stats').textContent = `Downloading the model (once, then cached): ${mb(m.loaded)} of ${mb(m.total)} MB`;
+      return;
+    }
+    if (m.type === 'loaded') { llmPending.get('load')?.resolve(m); llmPending.delete('load'); return; }
+    if (m.type === 'error' && m.id === undefined) { llmPending.get('load')?.reject(new Error(m.error)); return; }
+    const p = llmPending.get(m.id);
+    if (!p) return;
+    if (m.type === 'token') p.onToken(m.text);
+    else if (m.type === 'done') { llmPending.delete(m.id); p.resolve(m); }
+    else if (m.type === 'error') { llmPending.delete(m.id); p.reject(new Error(m.error)); }
+  };
+}
+
+async function loadModel(model) {
+  if (!llm) startLlm();
+  if (llmModel === model) return;
+  $('answer-stats').textContent = 'Loading the model…';
+  const loaded = new Promise((resolve, reject) => llmPending.set('load', { resolve, reject }));
+  llm.postMessage({ type: 'load', model });
+  const m = await loaded;
+  llmModel = model;
+  $('answer-stats').textContent = `Model ready (${m.device === 'webgpu' ? 'WebGPU' : 'WebAssembly, CPU'}, ${m.dtype}).`;
+}
+
+function renderAnswer(text) {
+  // [n] citations become links to the numbered results above
+  const frag = document.createDocumentFragment();
+  for (const part of text.split(/(\[\d+\])/)) {
+    const m = /^\[(\d+)\]$/.exec(part);
+    if (m && last && Number(m[1]) >= 1 && Number(m[1]) <= last.hits.length) {
+      frag.append(el('a', { href: '#hit-' + m[1], class: 'cite' }, part));
+    } else {
+      frag.append(part);
+    }
+  }
+  $('answer').replaceChildren(frag);
+}
+
+function answerError(err) {
+  $('answer-stats').textContent = 'Could not answer: ' + ((err && err.message) || err);
+  $('answer-stats').classList.add('error');
+}
+
+async function answer() {
+  if (!last) return;
+  $('answer-stats').classList.remove('error');
+  $('ask').disabled = true;
+  try {
+    await loadModel($('model').value);
+    const n = Number($('passages').value);
+    const messages = [
+      { role: 'system', content: SYSTEM },
+      { role: 'user', content: prompt(last.query, last.hits.slice(0, n)) },
+    ];
+    let text = '';
+    $('answer').replaceChildren();
+    const t0 = performance.now();
+    let first = 0;
+    const r = await llmCall({ type: 'ask', messages, maxTokens: 120 }, (t) => {
+      if (!first) first = performance.now() - t0;
+      text += t;
+      renderAnswer(text);
+    });
+    // The passages the answer was written from, always shown: small models cite unreliably.
+    $('answer-sources').replaceChildren('From ', ...last.hits.slice(0, n).flatMap((h, i) => [
+      i ? ', ' : '', el('a', { href: '#hit-' + (i + 1), class: 'cite' }, `[${i + 1}] ${h.title}`)]));
+    const secs = (r.ms - first) / 1000;
+    $('answer-stats').textContent = `Answered on this device from passages 1–${n}: first words after ` +
+      `${(first / 1000).toFixed(1)} s, ${r.tokens} pieces at ${secs > 0 ? (r.tokens / secs).toFixed(1) : '–'}/s.`;
+  } finally {
+    $('ask').disabled = false;
+  }
 }
 
 async function showArticle(id) {
@@ -156,6 +269,7 @@ async function main() {
   if (preset) { $('q').value = preset; runSearch(preset); }
 }
 
+$('ask').addEventListener('click', () => answer().catch((err) => answerError(err)));
 $('form').addEventListener('submit', (e) => { e.preventDefault(); runSearch($('q').value).catch((err) => status(String(err), true)); });
 for (const b of document.querySelectorAll('.example')) {
   b.addEventListener('click', () => { $('q').value = b.textContent; runSearch(b.textContent).catch((err) => status(String(err), true)); });
@@ -165,4 +279,4 @@ async function embedQuery(query) {
   const out = await embed(meta.model.query_prefix + query, { pooling: 'cls', normalize: true });
   return Array.from(out.data);
 }
-window.webcognee = { runSearch, showArticle, call, embedQuery };
+window.webcognee = { runSearch, showArticle, call, embedQuery, answer };
