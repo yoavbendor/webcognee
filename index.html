@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pocket Wikipedia</title>
+  <meta name="description" content="Semantic search over a slice of Wikipedia, entirely in your browser: Lance tables read by HTTP Range with nanolance's WebAssembly reader, questions embedded on the device.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Pocket Wikipedia</h1>
+    <p class="tag">Ask in your own words. The search runs on this device: no server, no account, nothing sent anywhere
+      but the static files it reads.</p>
+    <p id="corpus" class="fine"></p>
+  </header>
+  <main>
+    <form id="form">
+      <input id="q" type="search" placeholder="Ask anything about the 300 articles…" autocomplete="off" disabled>
+      <button id="go" disabled>Search</button>
+    </form>
+    <div class="examples">
+      <button class="example" type="button">who was the first person to walk on the moon</button>
+      <button class="example" type="button">which metal is refined from bauxite</button>
+      <button class="example" type="button">which philosopher tutored Alexander the Great</button>
+      <button class="example" type="button">an animal that eats termites at night</button>
+    </div>
+    <details class="knobs">
+      <summary>Search settings</summary>
+      <label>Partitions read per question <input id="nprobe" type="number" min="1" max="64" value="6"></label>
+    </details>
+    <p id="status" class="fine" role="status">Loading…</p>
+    <ol id="results"></ol>
+    <section id="article" hidden></section>
+  </main>
+  <footer class="fine">
+    <p>How it works: the passages were embedded once with bge-small-en-v1.5 and stored in
+      <a href="https://lance.org/format/">Lance</a> tables, sorted by IVF partition. Your question is embedded here with
+      the same model (transformers.js); <a href="https://github.com/yoavbendor/nanolance">nanolance</a>'s WebAssembly
+      reader then fetches only the nearest partitions' rows by HTTP Range from this static site.</p>
+    <p>Text from <a href="https://en.wikipedia.org/">Wikipedia</a> (a fragment of the 2026-10-01 English dump),
+      <a href="https://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a>; each title links to its article.
+      Code: <a href="https://github.com/yoavbendor/webcognee">webcognee</a> (Apache-2.0),
+      <a href="LICENSE-NOTICES.md">third-party notices</a>.</p>
+  </footer>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

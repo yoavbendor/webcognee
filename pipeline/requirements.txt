@@ -1,0 +1,6 @@
+# The pocket-corpus builder (pipeline/build_wiki.py)
+nanolance          # Lance writer + nanolance.lancedb (pip install -e <nanolance>/bindings/python until published)
+fastembed>=0.7     # bge-small-en-v1.5 passage embeddings (ONNX, CPU)
+mwparserfromhell>=0.6
+numpy
+pyarrow>=16

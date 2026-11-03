@@ -1,0 +1,27 @@
+{
+  "title": "Pocket Wikipedia",
+  "built": "2026-11-03",
+  "source": {
+    "dump": "https://dumps.wikimedia.org/other/mediawiki_content_current/enwiki/2026-10-01/xml/bzip2/enwiki-2026-10-01-p10p1113635.xml.bz2 (bytes 0-50331647)",
+    "dump_bytes": 50331648,
+    "license": "CC BY-SA 4.0",
+    "license_url": "https://creativecommons.org/licenses/by-sa/4.0/"
+  },
+  "model": {
+    "passages": "BAAI/bge-small-en-v1.5",
+    "queries": "Xenova/bge-small-en-v1.5",
+    "query_prefix": "Represent this sentence for searching relevant passages: ",
+    "dim": 384,
+    "pooling": "cls",
+    "normalize": true
+  },
+  "articles": 300,
+  "chunks": 6331,
+  "partitions": 80,
+  "links": 487,
+  "bytes": {
+    "articles": 163953,
+    "chunks": 7698394,
+    "partitions": 64902
+  }
+}
