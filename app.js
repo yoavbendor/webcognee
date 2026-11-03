@@ -24,7 +24,7 @@ function dataBase() {
 }
 const BASE = dataBase();
 const $ = (id) => document.getElementById(id);
-const worker = new Worker('search-worker.js?v=3');
+const worker = new Worker('search-worker.js?v=4');
 worker.onerror = (e) => status('The search worker failed to start: ' + (e.message || 'unknown error'), true);
 const pending = new Map();
 let nextId = 1;
