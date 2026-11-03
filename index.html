@@ -42,6 +42,8 @@
             <option value="onnx-community/Qwen2.5-0.5B-Instruct">Qwen2.5 0.5B Instruct (~480–510 MB)</option>
             <option value="HuggingFaceTB/SmolLM2-360M-Instruct">SmolLM2 360M Instruct (~270–365 MB, faster, weaker)</option>
           </select></label>
+        <label><input id="webgpu" type="checkbox"> Use WebGPU (experimental: on an iPhone 15 it was no faster than
+          the CPU, often slower)</label>
         <label>Passages given to it <input id="passages" type="number" min="1" max="10" value="3"></label>
       </details>
       <div id="answer" aria-live="polite"></div>
@@ -83,6 +85,6 @@
       }, 15000);
     })();
   </script>
-  <script type="module" src="app.js?v=5"></script>
+  <script type="module" src="app.js?v=6"></script>
 </body>
 </html>

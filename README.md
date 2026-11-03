@@ -42,7 +42,7 @@ Wikipedia dump prefix (bz2)                           question
 
 Under the results, **Answer from these passages** writes a short answer from the top passages (3 by default) with a
 small instruct model, run by transformers.js in a module worker (`llm-worker.js`). Nothing leaves the browser.
-- **Backend:** WebGPU when the browser has it (q4f16, or q4 without `shader-f16`); otherwise WebAssembly on the CPU (q8).
+- **Backend:** WebAssembly on the CPU (q8) by default. On an iPhone 15, WebGPU was no faster and often slower, so it is an opt-in under *Answer settings* (q4f16, or q4 without `shader-f16`).
 - **Models:** Qwen2.5-0.5B-Instruct by default (~480–510 MB) or SmolLM2-360M-Instruct (~270–365 MB). Either
   downloads once, on the first answer, and stays in the browser cache.
 - **Sources:** small models cite unreliably, so the passages an answer was written from are always listed under it,

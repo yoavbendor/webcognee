@@ -24,7 +24,7 @@ function dataBase() {
 }
 const BASE = dataBase();
 const $ = (id) => document.getElementById(id);
-const worker = new Worker('search-worker.js?v=5');
+const worker = new Worker('search-worker.js?v=6');
 worker.onerror = (e) => status('The search worker failed to start: ' + (e.message || 'unknown error'), true);
 const pending = new Map();
 let nextId = 1;
@@ -139,7 +139,7 @@ function llmCall(msg, onToken) {
 }
 
 function startLlm() {
-  llm = new Worker('llm-worker.js?v=5', { type: 'module' });
+  llm = new Worker('llm-worker.js?v=6', { type: 'module' });
   llm.onerror = (e) => answerError(new Error('The answering worker failed to start: ' + (e.message || 'unknown')));
   llm.onmessage = (ev) => {
     const m = ev.data;
@@ -158,14 +158,15 @@ function startLlm() {
   };
 }
 
-async function loadModel(model) {
+async function loadModel(model, webgpu) {
   if (!llm) startLlm();
-  if (llmModel === model) return;
+  const key = model + (webgpu ? ' webgpu' : ' wasm');
+  if (llmModel === key) return;
   $('answer-stats').textContent = 'Loading the model…';
   const loaded = new Promise((resolve, reject) => llmPending.set('load', { resolve, reject }));
-  llm.postMessage({ type: 'load', model });
+  llm.postMessage({ type: 'load', model, webgpu });
   const m = await loaded;
-  llmModel = model;
+  llmModel = key;
   $('answer-stats').textContent = `Model ready (${m.device === 'webgpu' ? 'WebGPU' : 'WebAssembly, CPU'}, ${m.dtype}).`;
 }
 
@@ -193,7 +194,7 @@ async function answer() {
   $('answer-stats').classList.remove('error');
   $('ask').disabled = true;
   try {
-    await loadModel($('model').value);
+    await loadModel($('model').value, $('webgpu').checked);
     const n = Number($('passages').value);
     const messages = [
       { role: 'system', content: SYSTEM },
