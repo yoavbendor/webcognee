@@ -8,7 +8,7 @@
 //   {type:'article', id, article}            -> one article's row and the titles of the articles it links to
 // Every reply carries the requests and bytes that call cost.
 
-importScripts('lib/weblance.js');
+importScripts('lib/weblance.js?v=3');
 
 let M = null;
 const tables = {};
@@ -94,7 +94,7 @@ function range(n) {
 
 async function init(base) {
   const t0 = performance.now();
-  M = await createWeblance({ locateFile: (p) => 'lib/' + p,
+  M = await createWeblance({ locateFile: (p) => 'lib/' + p + '?v=3',
     onAbort: (what) => post({ type: 'abort', what: String(what) }) });
   for (const name of ['articles', 'chunks', 'partitions']) tables[name] = open(base + name + '.lance');
   const info = JSON.parse(takeText(M.ccall('wl_info_json', 'number', ['number'], [tables.partitions])));

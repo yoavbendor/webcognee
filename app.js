@@ -8,9 +8,23 @@
 // that cannot run the bundle) stops this whole module before it can say why, and the page just sits there.
 const TRANSFORMERS = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/dist/transformers.min.js';
 
-const BASE = new URL('data/wiki/', location.href).href;
+// Where the tables are read from. On GitHub Pages, from the same repository through raw.githubusercontent.com:
+// Pages' CDN answers a Range request with a slice of the gzip-compressed file whenever the browser accepts gzip
+// (Safari and Firefox do), which breaks random access; raw.githubusercontent.com serves binary files as they are.
+// `?data=<url>` overrides it (tests, other hosts).
+function dataBase() {
+  const override = new URLSearchParams(location.search).get('data');
+  if (override) return new URL(override, location.href).href;
+  if (location.hostname.endsWith('.github.io')) {
+    const owner = location.hostname.slice(0, -'.github.io'.length);
+    const repo = location.pathname.split('/').filter(Boolean)[0];
+    if (repo) return `https://raw.githubusercontent.com/${owner}/${repo}/main/data/wiki/`;
+  }
+  return new URL('data/wiki/', location.href).href;
+}
+const BASE = dataBase();
 const $ = (id) => document.getElementById(id);
-const worker = new Worker('search-worker.js?v=2');
+const worker = new Worker('search-worker.js?v=3');
 worker.onerror = (e) => status('The search worker failed to start: ' + (e.message || 'unknown error'), true);
 const pending = new Map();
 let nextId = 1;
