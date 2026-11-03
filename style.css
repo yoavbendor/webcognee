@@ -71,3 +71,6 @@ footer { padding-bottom: 32px; margin-top: 24px; border-top: 1px solid var(--lin
 .knobs label { display: block; margin: 6px 0; }
 #answer-stats.error { color: var(--error); }
 .quiet { font-size: 0.85rem; padding: 4px 10px; color: var(--muted); }
+#budget table { border-collapse: collapse; font-size: 0.85rem; margin: 6px 0; }
+#budget td, #budget th { border-bottom: 1px solid var(--line); padding: 2px 8px 2px 0; text-align: left; }
+#budget td + td, #budget th + th { text-align: right; }

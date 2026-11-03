@@ -41,7 +41,7 @@ Wikipedia dump prefix (bz2)                           question
 ## Answers on the device
 
 Under the results, **Answer from these passages** writes a short answer from the top passages (3 by default) with a
-small instruct model, run by transformers.js in a module worker (`llm-worker.js`). Nothing leaves the browser.
+small instruct model, run by transformers.js in a module worker (`ai-worker.js`). The same worker embeds the questions. Nothing leaves the browser.
 - **Backend:** WebAssembly on the CPU (q8) by default. On an iPhone 15, WebGPU was no faster and often slower, so it is an opt-in under *Answer settings* (q4f16, or q4 without `shader-f16`).
 - **Models:** SmolLM2-360M-Instruct by default (~365 MB), SmolLM2-135M-Instruct (~137 MB), or Qwen2.5-0.5B-Instruct
   (~510 MB, the best answers). On an iPhone 15, Qwen ran out of WebAssembly memory. When a model runs out of memory,
@@ -51,6 +51,22 @@ small instruct model, run by transformers.js in a module worker (`llm-worker.js`
   linked to the numbered results. Any `[n]` the model writes is linked too.
 - **Speed:** in this repository's sandbox (4 slow cores, no GPU) the WebAssembly path takes about 35 s to the first
   word and produces 0.6 tokens/s. A phone with WebGPU is much faster; that is the case the feature is for.
+
+**Memory.** These figures are from desktop Chromium, measured with `tools/measure_memory.cjs` and recorded in
+`app.js`. The page shows the table for the chosen model under the answer button.
+
+| | WebAssembly | whole page (browser memory above its baseline) |
+|---|---|---|
+| page ready: Lance reader + onnxruntime + query embedder | 22 + 104 MB | ~600 MB |
+| + SmolLM2-135M (137 MB file) | +351 MB | ~1.2 GB, ~1.5 GB while loading |
+| + SmolLM2-360M (365 MB file) | +828 MB | ~1.6 GB, ~2.0 GB while loading |
+| + Qwen2.5-0.5B (512 MB file, estimated) | +~1.2 GB | ~2 GB, ~2.6 GB while loading |
+
+- **Answer model:** it takes about 2.4 times its file in WebAssembly memory, and a WebAssembly memory never shrinks.
+  Phones therefore default to the 135M model and desktops to the 360M one.
+- **One onnxruntime:** the embedder and the answer model share one instance in `ai-worker.js`. Each instance creates a
+  shared WebAssembly memory with a 4 GB maximum, and Safari reserves that maximum up front. Two such memories
+  plausibly caused the iPhone's "RangeError: Out of memory".
 
 **Debug log.** Every stage worth knowing about is written to this browser's `localStorage` as it happens:
 - page start, the tables opening, each search with its bytes and memory

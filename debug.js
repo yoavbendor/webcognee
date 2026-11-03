@@ -25,7 +25,7 @@
   const locks = navigator.locks && typeof navigator.locks.request === 'function' ? navigator.locks : null;
   const PANEL_EVENTS = 200;
   const IMMEDIATE = { error: 1, 'console.error': 1, 'worker.error': 1, 'worker.messageerror': 1, abort: 1,
-    'llm.stage': 1, 'llm.error': 1, 'llm.progress': 1, 'stage': 1, 'mem': 1 };
+    'ai.stage': 1, 'ai.error': 1, 'ai.progress': 1, 'stage': 1, 'mem': 1, 'status.error': 1 };
   const CSS = `
 .wl-banner, .wl-panel { font: 14px/1.45 system-ui, -apple-system, sans-serif; color: var(--fg); }
 .wl-banner { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 16px;
@@ -307,8 +307,14 @@
   // The copy text: a header, then the crashed visits and the current one (the last three), one event per
   // line. Over REPORT_MAX characters, the oldest events go first, and the report says how many.
   function report() {
+    let context = [];
+    try {
+      context = typeof window.wlDebugContext === 'function' ? window.wlDebugContext() : [];
+    } catch (e) {
+      context = ['(the page context failed: ' + e + ')'];
+    }
     const head = ['webcognee debug report', 'time: ' + new Date().toISOString(), 'page: ' + pageName + ' (visit ' + cur.id + ')']
-      .concat(envLines(cur.env));
+      .concat(context, envLines(cur.env));
     if (!storageOk) head.push('storage: blocked; this log lives in memory only');
     const blocks = visits.filter((v) => v.crashed || v === cur).slice(-3).map((v) => ({
       title: '== visit ' + v.id + ' ' + v.page + ' ' + v.start + ' (' + stateOf(v) + ')',

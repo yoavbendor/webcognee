@@ -8,7 +8,7 @@
 //   {type:'article', id, article}            -> one article's row and the titles of the articles it links to
 // Every reply carries the requests and bytes that call cost.
 
-importScripts('lib/weblance.js?v=7');
+importScripts('memprobe.js?v=9', 'lib/weblance.js?v=9');
 
 let M = null;
 const tables = {};
@@ -94,7 +94,7 @@ function range(n) {
 
 async function init(base) {
   const t0 = performance.now();
-  M = await createWeblance({ locateFile: (p) => 'lib/' + p + '?v=7',
+  M = await createWeblance({ locateFile: (p) => 'lib/' + p + '?v=9',
     onAbort: (what) => post({ type: 'abort', what: String(what) }) });
   for (const name of ['articles', 'chunks', 'partitions']) tables[name] = open(base + name + '.lance');
   const info = JSON.parse(takeText(M.ccall('wl_info_json', 'number', ['number'], [tables.partitions])));
@@ -152,10 +152,10 @@ self.onmessage = async (ev) => {
   try {
     if (m.type === 'init') {
       const r = await init(m.base);
-      post({ type: 'init', ok: true, ...r, heap: M.HEAPU8.length });
+      post({ type: 'init', ok: true, ...r, heap: M.HEAPU8.length, wasm: globalThis.wasmMem.line() });
     } else if (m.type === 'search') {
       const r = search(m);
-      post({ type: 'search', id: m.id, ok: true, ...r, stats: takeStats(), heap: M.HEAPU8.length });
+      post({ type: 'search', id: m.id, ok: true, ...r, stats: takeStats(), heap: M.HEAPU8.length, wasm: globalThis.wasmMem.line() });
     } else if (m.type === 'article') {
       const r = article(m.article);
       post({ type: 'article', id: m.id, ok: true, ...r, stats: takeStats() });

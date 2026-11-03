@@ -1,19 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Yoav Bendor
 //
-// The page: embeds the question in the browser (transformers.js, bge-small-en-v1.5, the model the passages were
-// embedded with) and hands the vector to search-worker.js, which reads the Lance tables by HTTP Range.
+// The page. Two workers do the work:
+//   search-worker.js  nanolance's WebAssembly reader: the Lance tables, read by HTTP Range
+//   ai-worker.js      transformers.js: the query embedder (bge-small-en-v1.5) and the answer model, sharing one
+//                     onnxruntime and one WebAssembly memory
+// The page itself runs no WebAssembly. Everything worth knowing about a crash goes to the debug log (debug.js).
 
-// Loaded with import() inside main(), not a static import: a static import that fails (a blocked CDN, a browser
-// that cannot run the bundle) stops this whole module before it can say why, and the page just sits there.
-const TRANSFORMERS = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/dist/transformers.min.js';
+const BUILD = { version: '0.9', date: '2026-11-03', note: 'one onnxruntime for embedder and answer; measured memory budget; small model on phones' };
+
+const D = window.wlDebug || { log() {}, span() { return () => {}; }, attachWorker() {}, mem() {}, showPanel() {} };
+const $ = (id) => document.getElementById(id);
+const params = new URLSearchParams(location.search);
 
 // Where the tables are read from. On GitHub Pages, from the same repository through raw.githubusercontent.com:
 // Pages' CDN answers a Range request with a slice of the gzip-compressed file whenever the browser accepts gzip
 // (Safari and Firefox do), which breaks random access; raw.githubusercontent.com serves binary files as they are.
 // `?data=<url>` overrides it (tests, other hosts).
 function dataBase() {
-  const override = new URLSearchParams(location.search).get('data');
+  const override = params.get('data');
   if (override) return new URL(override, location.href).href;
   if (location.hostname.endsWith('.github.io')) {
     const owner = location.hostname.slice(0, -'.github.io'.length);
@@ -23,40 +28,98 @@ function dataBase() {
   return new URL('data/wiki/', location.href).href;
 }
 const BASE = dataBase();
-const D = window.wlDebug || { log() {}, span() { return () => {}; }, attachWorker() {}, mem() {} };
 
-// Storage the browser grants this site (the model cache lives in it) and the device's memory class, logged at the
-// points where memory matters.
-async function logMemory(where) {
-  const f = { where, deviceMemGB: navigator.deviceMemory, jsMB: D.mem() };
+// ---------------------------------------------------------------------------------------------- the budget
+
+// What the page holds in memory, in MB, measured in desktop Chromium (tools/measure_memory.cjs, 2026-11-03): the AI
+// worker's WebAssembly memory after each step (the debug log's wasm= fields), and the browser's resident memory
+// above what it used before the page opened. A WebAssembly memory never shrinks, and while a model loads its file
+// is also held once as a JavaScript buffer. The answer model takes about 2.5x its file in WebAssembly memory.
+const MODELS = {
+  'HuggingFaceTB/SmolLM2-135M-Instruct': { fileMB: 137, wasmMB: 351, rssSteadyMB: 1180, rssPeakMB: 1510 },
+  'HuggingFaceTB/SmolLM2-360M-Instruct': { fileMB: 365, wasmMB: 828, rssSteadyMB: 1550, rssPeakMB: 2050 },
+  // not measured: 2.4x its file, as the two above
+  'onnx-community/Qwen2.5-0.5B-Instruct': { fileMB: 512, wasmMB: 1230, rssSteadyMB: 2000, rssPeakMB: 2600, estimated: true },
+};
+const READY = { readerWasmMB: 22, aiWasmMB: 104, rssMB: 600 };  // page open, tables open, embedder loaded
+
+function budget(model) {
+  const m = MODELS[model] || { fileMB: 0, wasmMB: 0, rssSteadyMB: 0, rssPeakMB: 0 };
+  const est = m.estimated ? ' (estimated)' : '';
+  const rows = [
+    ['Lance reader: search worker WebAssembly', latest.searchWasmMb || READY.readerWasmMB, latest.searchWasmMb || READY.readerWasmMB],
+    ['onnxruntime + query embedder bge-small q8: AI worker WebAssembly', READY.aiWasmMB, READY.aiWasmMB],
+    [`answer model ${model.split('/')[1]} q8 (${m.fileMB} MB file): AI worker WebAssembly${est}`, m.wasmMB, m.wasmMB + m.fileMB],
+  ];
+  const wasm = rows.reduce((a, r) => a + r[1], 0);
+  return { rows, wasm, wasmPeak: rows.reduce((a, r) => a + r[2], 0), readyRss: READY.rssMB, rss: m.rssSteadyMB, rssPeak: m.rssPeakMB };
+}
+
+function budgetLines(model) {
+  const b = budget(model);
+  return ['memory budget for ' + model.split('/')[1] + ' (MB, measured in desktop Chromium; steady / while the model loads)']
+    .concat(b.rows.map((r) => `  ${r[0]}: ${r[1]} / ${r[2]}`))
+    .concat([`  WebAssembly total: ${b.wasm} / ${b.wasmPeak}`,
+      `  whole page (browser memory above its baseline): ${b.readyRss} ready, ${b.rss} with the model / ${b.rssPeak} while it loads`]);
+}
+
+// Phones get the small answer model first: the 360M one needs ~1.6 GB, ~2 GB while loading, about what iOS allows
+// one tab (it crashed an iPhone 15). Desktops get the 360M one.
+const PHONE = /iPhone|iPad|iPod|Android|Mobile/i.test(navigator.userAgent) ||
+  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+// ---------------------------------------------------------------------------------------------- the report
+
+// The latest facts, for the report's header (debug.js calls wlDebugContext() when it builds the report).
+const latest = { searchWasm: '', searchWasmMb: 0, aiWasm: '', storage: '', model: '', device: '', stage: '' };
+
+window.wlDebugContext = () => {
+  const model = latest.model || ($('model') && $('model').value) || '';
+  return [
+    `webcognee ${BUILD.version} (${BUILD.date}): ${BUILD.note}`,
+    `data: ${BASE}${meta ? ` · ${meta.articles} articles, ${meta.chunks} passages, built ${meta.built}` : ''}`,
+    `answer model: ${model || 'not chosen'}${latest.device ? ' on ' + latest.device : ''} · last AI stage: ${latest.stage || 'none'}`,
+    `isolation: crossOriginIsolated=${self.crossOriginIsolated} SharedArrayBuffer=${typeof SharedArrayBuffer !== 'undefined'} ` +
+      `WebGPU=${!!navigator.gpu} deviceMemoryGB=${navigator.deviceMemory || 'n/a'} cores=${navigator.hardwareConcurrency || 'n/a'}`,
+    `storage: ${latest.storage || 'unknown'}`,
+    `WebAssembly memories: search worker: ${latest.searchWasm || 'n/a'} · AI worker: ${latest.aiWasm || 'n/a'} · page: ` +
+      (globalThis.wasmMem ? globalThis.wasmMem.line() : 'n/a'),
+  ].concat(model ? budgetLines(model) : []);
+};
+
+async function logStorage(where) {
   try {
     const e = navigator.storage && navigator.storage.estimate ? await navigator.storage.estimate() : null;
-    if (e) { f.storageUsedBytes = e.usage; f.storageQuotaBytes = e.quota; }
-  } catch (err) { f.storageError = String(err); }
-  D.log('mem', f);
+    if (e) latest.storage = `${Math.round(e.usage / 1048576)} MB used of ${Math.round(e.quota / 1048576)} MB`;
+  } catch (err) {
+    latest.storage = 'estimate failed: ' + err;
+  }
+  D.log('mem', { where, storage: latest.storage, jsMB: D.mem(), searchWasm: latest.searchWasm, aiWasm: latest.aiWasm });
 }
-const $ = (id) => document.getElementById(id);
-const worker = new Worker('search-worker.js?v=7');
-D.attachWorker(worker, 'search');
-worker.onerror = (e) => status('The search worker failed to start: ' + (e.message || 'unknown error'), true);
+
+// ---------------------------------------------------------------------------------------------- workers
+
 const pending = new Map();
 let nextId = 1;
 let meta = null;
-let embed = null;
+let last = null;
 
-function call(msg) {
-  return new Promise((resolve, reject) => {
-    const id = nextId++;
-    pending.set(id, { resolve, reject });
-    worker.postMessage({ ...msg, id });
-  });
+function track(m) {
+  if (m && m.wasm) {
+    latest.searchWasm = m.wasm;
+    const mb = /, (\d+) MB/.exec(m.wasm);
+    if (mb) latest.searchWasmMb = Number(mb[1]);
+  }
 }
 
+const search = new Worker('search-worker.js?v=9');
+D.attachWorker(search, 'search');
+search.onerror = (e) => status('The search worker failed to start: ' + (e.message || 'unknown error'), true);
 let initDone;
 const initReady = new Promise((r) => { initDone = r; });
-
-worker.onmessage = (ev) => {
+search.onmessage = (ev) => {
   const m = ev.data;
+  track(m);
   if (m.type === 'abort') { status('The reader stopped: ' + m.what, true); return; }
   if (m.type === 'init') { initDone(m); return; }
   const p = pending.get(m.id);
@@ -64,6 +127,85 @@ worker.onmessage = (ev) => {
   pending.delete(m.id);
   if (m.ok) p.resolve(m); else p.reject(new Error(m.error));
 };
+
+function call(msg) {
+  return new Promise((resolve, reject) => {
+    const id = nextId++;
+    pending.set(id, { resolve, reject });
+    search.postMessage({ ...msg, id });
+  });
+}
+
+let ai = null;           // the AI worker: embedder + answer model
+let aiModel = null;      // the answer model it has loaded
+const aiPending = new Map();
+let embedReady = null;   // resolves once the embedder is loaded
+
+function aiCall(msg, onToken) {
+  return new Promise((resolve, reject) => {
+    const id = nextId++;
+    aiPending.set(id, { resolve, reject, onToken });
+    ai.postMessage({ ...msg, id });
+  });
+}
+
+function startAi() {
+  D.log('ai.stage', { what: 'worker.create' });
+  ai = new Worker('ai-worker.js?v=9', { type: 'module' });
+  D.attachWorker(ai, 'ai');
+  ai.onerror = (e) => {
+    const err = new Error('The AI worker failed to start: ' + (e.message || 'unknown'));
+    D.log('ai.error', { error: err.message });
+    for (const p of aiPending.values()) p.reject(err);
+    aiPending.clear();
+  };
+  ai.onmessage = (ev) => {
+    const m = ev.data;
+    if (m.wasm) latest.aiWasm = m.wasm;
+    if (m.type === 'stage') {
+      const { type, ...fields } = m;
+      latest.stage = m.what;
+      D.log(m.what === 'download' ? 'ai.progress' : 'ai.stage', fields);
+      if (m.what === 'session.creating') logStorage('before session ' + m.kind);
+      return;
+    }
+    if (m.type === 'progress') {
+      const mb = (n) => Math.round((n || 0) / 1e6);
+      const text = `${mb(m.loaded)} of ${mb(m.total)} MB`;
+      if (m.kind === 'embed') $('status').textContent = `Loading the embedding model (once, then cached): ${text}`;
+      else $('answer-stats').textContent = `Downloading the answer model (once, then cached): ${text}`;
+      return;
+    }
+    if (m.type === 'error') D.log('ai.error', { op: m.op, error: m.error });
+    const key = m.type === 'embed-loaded' || (m.type === 'error' && m.op === 'embed-load') ? 'embed-load'
+      : m.type === 'loaded' || (m.type === 'error' && m.op === 'load') ? 'load' : m.id;
+    const p = aiPending.get(key);
+    if (!p) return;
+    if (m.type === 'token') { p.onToken(m.text); return; }
+    aiPending.delete(key);
+    if (m.type === 'error') p.reject(new Error(m.error)); else p.resolve(m);
+  };
+  embedReady = new Promise((resolve, reject) => aiPending.set('embed-load', { resolve, reject }));
+  ai.postMessage({ type: 'embed-load', model: meta.model.queries });
+}
+
+// A worker whose WebAssembly memory could not grow keeps it: it is closed, and a new one starts clean.
+function restartAi() {
+  if (ai) ai.terminate();
+  ai = null;
+  aiModel = null;
+  for (const p of aiPending.values()) p.reject(new Error('restarted'));
+  aiPending.clear();
+  startAi();
+}
+
+async function embed(text) {
+  await embedReady;
+  const r = await aiCall({ type: 'embed', text });
+  return r.vector;
+}
+
+// ---------------------------------------------------------------------------------------------- the page
 
 function status(text, error) {
   window.webcogneeStarted = true;  // the watchdog in index.html stands down
@@ -100,14 +242,14 @@ async function runSearch(query) {
   if (!query.trim()) return;
   const t0 = performance.now();
   status('Embedding the question…');
-  const out = await embed(meta.model.query_prefix + query, { pooling: 'cls', normalize: true });
-  const vector = new Float32Array(out.data);
+  const vector = await embed(meta.model.query_prefix + query);
   const t1 = performance.now();
   status('Searching…');
   const nprobe = Number($('nprobe').value);
   const r = await call({ type: 'search', vector, k: 10, nprobe });
   D.log('search', { q: query, nprobe, embedMs: Math.round(t1 - t0), ms: Math.round(r.ms), scanned: r.scanned,
-    req: r.stats.requests, bytes: r.stats.bytes, heapBytes: r.heap, top: r.hits[0] && r.hits[0].title });
+    req: r.stats.requests, bytes: r.stats.bytes, searchWasm: r.wasm, aiWasm: latest.aiWasm,
+    top: r.hits[0] && r.hits[0].title });
   last = { query, hits: r.hits };
   const list = $('results');
   list.replaceChildren();
@@ -123,18 +265,27 @@ async function runSearch(query) {
   $('answer').replaceChildren();
   $('answer-sources').replaceChildren();
   $('answer-stats').textContent = '';
+  showBudget();
   if ($('auto-answer').checked) answer().catch((err) => answerError(err));
   status(`${r.hits.length} passages · embedded in ${Math.round(t1 - t0)} ms · searched ${r.scanned} of ` +
     `${meta.chunks} passages in ${r.probed} partitions, ${r.stats.requests} range requests, ${kb(r.stats.bytes)}, ` +
     `${Math.round(r.ms)} ms`);
 }
 
-// ---------------------------------------------------------------------------------------------- answers
+function showBudget() {
+  const b = budget($('model').value);
+  $('budget').replaceChildren(
+    el('summary', {}, `Memory with this model: ~${(b.rss / 1024).toFixed(1)} GB, ~${(b.rssPeak / 1024).toFixed(1)} GB while it loads`),
+    el('table', {}, el('tr', {}, el('th', {}, 'part'), el('th', {}, 'MB'), el('th', {}, 'loading')),
+      ...b.rows.map((r) => el('tr', {}, el('td', {}, r[0]), el('td', {}, String(r[1])), el('td', {}, String(r[2])))),
+      el('tr', {}, el('th', {}, 'WebAssembly total'), el('th', {}, String(b.wasm)), el('th', {}, String(b.wasmPeak))),
+      el('tr', {}, el('th', {}, 'whole page, ready / with the model'), el('th', {}, String(b.readyRss)), el('th', {}, b.rss + ' / ' + b.rssPeak))),
+    el('p', { class: 'fine' }, 'Measured in desktop Chromium; Safari differs, but in proportion. "Whole page" is ' +
+      'the browser\'s memory above what it used before the page: the workers, compiled code, JavaScript and caches ' +
+      'besides the WebAssembly heaps. The debug log records the WebAssembly memory at every stage on this device.'));
+}
 
-let last = null;
-let llm = null;          // the module worker, started on the first answer
-let llmModel = null;     // the model it has loaded
-const llmPending = new Map();
+// ---------------------------------------------------------------------------------------------- answers
 
 const SYSTEM = 'You are a helpful assistant. Answer questions from the Wikipedia passages the user gives you, ' +
   'and cite the passage numbers you used, like [1].';
@@ -146,53 +297,20 @@ function prompt(query, hits) {
     `"${query}" in one to three sentences, citing passages like [1]. If they do not answer it, say so.`;
 }
 
-function llmCall(msg, onToken) {
-  return new Promise((resolve, reject) => {
-    const id = nextId++;
-    llmPending.set(id, { resolve, reject, onToken });
-    llm.postMessage({ ...msg, id });
-  });
-}
-
-function startLlm() {
-  D.log('llm.stage', { what: 'worker.create' });
-  llm = new Worker('llm-worker.js?v=7', { type: 'module' });
-  D.attachWorker(llm, 'llm');
-  llm.onerror = (e) => answerError(new Error('The answering worker failed to start: ' + (e.message || 'unknown')));
-  llm.onmessage = (ev) => {
-    const m = ev.data;
-    if (m.type === 'stage') {
-      const { type, ...fields } = m;
-      D.log(m.what === 'download' ? 'llm.progress' : 'llm.stage', fields);
-      if (m.what === 'session.creating') logMemory('before session');
-      return;
-    }
-    if (m.type === 'error') D.log('llm.error', { error: m.error });
-    if (m.type === 'progress') {
-      const mb = (n) => Math.round((n || 0) / 1e6);
-      $('answer-stats').textContent = `Downloading the model (once, then cached): ${mb(m.loaded)} of ${mb(m.total)} MB`;
-      return;
-    }
-    if (m.type === 'loaded') { llmPending.get('load')?.resolve(m); llmPending.delete('load'); return; }
-    if (m.type === 'error' && m.id === undefined) { llmPending.get('load')?.reject(new Error(m.error)); return; }
-    const p = llmPending.get(m.id);
-    if (!p) return;
-    if (m.type === 'token') p.onToken(m.text);
-    else if (m.type === 'done') { llmPending.delete(m.id); p.resolve(m); }
-    else if (m.type === 'error') { llmPending.delete(m.id); p.reject(new Error(m.error)); }
-  };
-}
-
 async function loadModel(model, webgpu) {
-  if (!llm) startLlm();
   const key = model + (webgpu ? ' webgpu' : ' wasm');
-  if (llmModel === key) return;
+  if (aiModel === key) return;
   $('answer-stats').textContent = 'Loading the model…';
-  const loaded = new Promise((resolve, reject) => llmPending.set('load', { resolve, reject }));
-  llm.postMessage({ type: 'load', model, webgpu, simulateOom: new URLSearchParams(location.search).get('oom') });
+  latest.model = model;
+  const b = budget(model);
+  D.log('ai.stage', { what: 'load.request', model, webgpu, expectWasmMB: b.wasm, expectPeakWasmMB: b.wasmPeak,
+    expectPageMB: b.rss, expectPeakPageMB: b.rssPeak });
+  const loaded = new Promise((resolve, reject) => aiPending.set('load', { resolve, reject }));
+  ai.postMessage({ type: 'load', model, webgpu, simulateOom: params.get('oom') });
   const m = await loaded;
-  logMemory('model loaded');
-  llmModel = key;
+  latest.device = `${m.device} ${m.dtype}`;
+  logStorage('model loaded');
+  aiModel = key;
   $('answer-stats').textContent = `Model ready (${m.device === 'webgpu' ? 'WebGPU' : 'WebAssembly, CPU'}, ${m.dtype}).`;
 }
 
@@ -211,7 +329,7 @@ function renderAnswer(text) {
 }
 
 function answerError(err) {
-  D.log('llm.error', { error: String((err && err.message) || err) });
+  D.log('ai.error', { what: 'answer.failed', error: String((err && err.message) || err), aiWasm: latest.aiWasm });
   $('answer-stats').textContent = 'Could not answer: ' + ((err && err.message) || err);
   $('answer-stats').classList.add('error');
 }
@@ -226,14 +344,6 @@ function outOfMemory(err) {
   return /out of memory|RangeError|Aborted\(\)|memory access out of bounds|could not allocate/i.test(String((err && err.message) || err));
 }
 
-// A worker whose WebAssembly memory could not grow keeps that memory: it is closed, and a new one starts clean.
-function discardLlm() {
-  if (llm) llm.terminate();
-  llm = null;
-  llmModel = null;
-  llmPending.clear();
-}
-
 async function loadModelSteppingDown(webgpu) {
   for (;;) {
     const model = $('model').value;
@@ -242,10 +352,12 @@ async function loadModelSteppingDown(webgpu) {
       return model;
     } catch (err) {
       const smaller = SMALLER[model];
-      D.log('llm.error', { what: 'load.failed', model, oom: outOfMemory(err), next: smaller, error: String((err && err.message) || err) });
+      D.log('ai.error', { what: 'load.failed', model, oom: outOfMemory(err), next: smaller, aiWasm: latest.aiWasm,
+        error: String((err && err.message) || err) });
       if (!outOfMemory(err) || !smaller) throw err;
-      discardLlm();
+      restartAi();
       $('model').value = smaller;
+      showBudget();
       $('answer-stats').textContent = `${model.split('/')[1]} ran out of memory on this device; trying ${smaller.split('/')[1]}…`;
     }
   }
@@ -253,13 +365,13 @@ async function loadModelSteppingDown(webgpu) {
 
 async function answer() {
   if (!last) return;
-  D.log('llm.stage', { what: 'answer.click', model: $('model').value, webgpu: $('webgpu').checked });
-  $('model').dataset.asked = $('model').value;
+  D.log('ai.stage', { what: 'answer.click', model: $('model').value, webgpu: $('webgpu').checked });
   $('answer-stats').classList.remove('error');
   $('ask').disabled = true;
   try {
+    const asked = $('model').value;
     const model = await loadModelSteppingDown($('webgpu').checked);
-    if (model !== $('model').dataset.asked && $('model').dataset.asked) D.log('llm.stage', { what: 'stepped.down', to: model });
+    if (model !== asked) D.log('ai.stage', { what: 'stepped.down', from: asked, to: model });
     const n = Number($('passages').value);
     const messages = [
       { role: 'system', content: SYSTEM },
@@ -269,7 +381,7 @@ async function answer() {
     $('answer').replaceChildren();
     const t0 = performance.now();
     let first = 0;
-    const r = await llmCall({ type: 'ask', messages, maxTokens: 120 }, (t) => {
+    const r = await aiCall({ type: 'ask', messages, maxTokens: 120 }, (t) => {
       if (!first) first = performance.now() - t0;
       text += t;
       renderAnswer(text);
@@ -280,6 +392,7 @@ async function answer() {
     const secs = (r.ms - first) / 1000;
     $('answer-stats').textContent = `Answered on this device from passages 1–${n}: first words after ` +
       `${(first / 1000).toFixed(1)} s, ${r.tokens} pieces at ${secs > 0 ? (r.tokens / secs).toFixed(1) : '–'}/s.`;
+    D.log('ai.stage', { what: 'answer.shown', tokens: r.tokens, firstMs: Math.round(first), aiWasm: latest.aiWasm });
   } finally {
     $('ask').disabled = false;
   }
@@ -301,57 +414,45 @@ async function showArticle(id) {
 }
 
 async function main() {
-  D.log('stage', { what: 'main.begin', base: BASE });
-  logMemory('start');
+  if (PHONE) $('model').value = 'HuggingFaceTB/SmolLM2-135M-Instruct';
+  D.log('stage', { what: 'main.begin', build: `${BUILD.version} ${BUILD.date}`, base: BASE, phone: PHONE,
+    model: $('model').value });
+  $('build').textContent = `webcognee ${BUILD.version} · ${BUILD.date}`;
+  logStorage('start');
   status('Reading the corpus description…');
   const res = await fetch(BASE + 'meta.json');
   if (!res.ok) throw new Error(`data/wiki/meta.json: HTTP ${res.status}`);
   meta = await res.json();
   $('corpus').textContent = `${meta.articles} articles · ${meta.chunks} passages · ${meta.links} links between them`;
   status('Opening the tables and loading the embedding model…');
-  worker.postMessage({ type: 'init', base: BASE });
-  let transformers;
-  try {
-    const end = D.span('stage', { what: 'transformers.import' });
-    transformers = await import(TRANSFORMERS);
-    end();
-  } catch (err) {
-    throw new Error('Could not load transformers.js from cdn.jsdelivr.net (blocked, offline, or this browser cannot ' +
-      'run it): ' + ((err && err.message) || err));
-  }
-  const { pipeline, env } = transformers;
-  env.allowLocalModels = false;
-  const model = pipeline('feature-extraction', meta.model.queries, { dtype: 'q8',
-    progress_callback: (p) => {
-      if (p.status === 'progress' && p.file && p.file.endsWith('.onnx')) {
-        status(`Loading the embedding model (about 34 MB, once)… ${Math.round(p.progress)}%`);
-      }
-    } }).catch((err) => {
-    throw new Error('Could not load the embedding model from huggingface.co: ' + ((err && err.message) || err));
-  });
+  search.postMessage({ type: 'init', base: BASE });
+  startAi();
   const endEmbed = D.span('stage', { what: 'embedder.load', model: meta.model.queries });
-  const [init, extractor] = await Promise.all([initReady, model]);
-  endEmbed();
+  const [init] = await Promise.all([initReady, embedReady.catch((err) => {
+    throw new Error('Could not load the embedding model: ' + ((err && err.message) || err));
+  })]);
+  endEmbed({ aiWasm: latest.aiWasm });
   D.log('stage', { what: 'tables.open', ok: init.ok, ms: init.ms, req: init.stats && init.stats.requests,
-    bytes: init.stats && init.stats.bytes, heapBytes: init.heap });
+    bytes: init.stats && init.stats.bytes, searchWasm: init.wasm });
   if (!init.ok) throw new Error(init.error);
-  embed = extractor;
   $('q').disabled = false;
   $('go').disabled = false;
   status(`Ready. Tables opened in ${Math.round(init.ms)} ms (${init.stats.requests} requests, ${kb(init.stats.bytes)}).`);
-  const preset = new URLSearchParams(location.search).get('q');
+  logStorage('ready');
+  const preset = params.get('q');
   if (preset) { $('q').value = preset; runSearch(preset); }
 }
 
-$('show-debug').addEventListener('click', () => D.showPanel && D.showPanel());
+$('show-debug').addEventListener('click', () => D.showPanel());
 $('ask').addEventListener('click', () => answer().catch((err) => answerError(err)));
+$('model').addEventListener('change', showBudget);
 $('form').addEventListener('submit', (e) => { e.preventDefault(); runSearch($('q').value).catch((err) => status(String(err), true)); });
 for (const b of document.querySelectorAll('.example')) {
   b.addEventListener('click', () => { $('q').value = b.textContent; runSearch(b.textContent).catch((err) => status(String(err), true)); });
 }
 main().catch((err) => status(String(err), true));
+
 async function embedQuery(query) {
-  const out = await embed(meta.model.query_prefix + query, { pooling: 'cls', normalize: true });
-  return Array.from(out.data);
+  return Array.from(await embed(meta.model.query_prefix + query));
 }
-window.webcognee = { runSearch, showArticle, call, embedQuery, answer };
+window.webcognee = { runSearch, showArticle, call, embedQuery, answer, budget };

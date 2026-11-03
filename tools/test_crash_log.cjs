@@ -36,14 +36,14 @@ const path = require('path');
     check(true, 'banner shown after the crash: ' + (await again.textContent('.wl-banner')).slice(0, 60));
     const report = await again.evaluate(() => window.wlDebug.report());
     check(/\(CRASHED\)/.test(report), 'report has the crashed visit');
-    check(/llm\.stage .*what=answer\.click/.test(report), 'report has the answer click');
-    check(/llm\.(stage|progress) .*what=(load\.begin|download|file\.)/.test(report), 'report has model-load stages');
+    check(/ai\.stage .*what=answer\.click/.test(report), 'report has the answer click');
+    check(/ai\.(stage|progress) .*what=(load\.begin|download|file\.)/.test(report), 'report has model-load stages');
     check(/search q=/.test(report), 'report has the search');
     await again.click('.wl-banner button');  // Copy debug report
     await again.waitForTimeout(500);
     const clip = await again.evaluate(() => navigator.clipboard.readText().catch(() => ''));
     check(clip.startsWith('webcognee debug report'), 'Copy put the report on the clipboard (' + clip.length + ' chars)');
-    console.log('--- report excerpt ---\n' + report.split('\n').filter((l) => /crashed|llm\.|search q=/.test(l)).slice(0, 14).join('\n'));
+    console.log('--- report excerpt ---\n' + report.split('\n').filter((l) => /crashed|CRASHED|ai\.|search q=|webcognee 0|memory|WebAssembly/.test(l)).slice(0, 14).join('\n'));
   } finally {
     await b.close();
     srv.kill();

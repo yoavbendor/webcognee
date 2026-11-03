@@ -6,7 +6,8 @@
   <title>Pocket Wikipedia</title>
   <meta name="description" content="Semantic search over a slice of Wikipedia, entirely in your browser: Lance tables read by HTTP Range with nanolance's WebAssembly reader, questions embedded on the device.">
   <link rel="stylesheet" href="style.css">
-  <script src="debug.js?v=7"></script>
+  <script src="memprobe.js?v=9"></script>
+  <script src="debug.js?v=9"></script>
 </head>
 <body>
   <header>
@@ -14,6 +15,7 @@
     <p class="tag">Ask in your own words. The search runs on this device: no server, no account, nothing sent anywhere
       but the static files it reads.</p>
     <p id="corpus" class="fine"></p>
+    <p id="build" class="fine"></p>
   </header>
   <main>
     <form id="form">
@@ -41,14 +43,15 @@
         <summary>Answer settings</summary>
         <label>Model
           <select id="model">
-            <option value="HuggingFaceTB/SmolLM2-360M-Instruct" selected>SmolLM2 360M Instruct (~365 MB)</option>
-            <option value="HuggingFaceTB/SmolLM2-135M-Instruct">SmolLM2 135M Instruct (~137 MB, fastest, weakest)</option>
-            <option value="onnx-community/Qwen2.5-0.5B-Instruct">Qwen2.5 0.5B Instruct (~510 MB, best; ran out of memory on an iPhone 15)</option>
+            <option value="HuggingFaceTB/SmolLM2-360M-Instruct" selected>SmolLM2 360M Instruct (365 MB file, ~1.6 GB in use; desktop default)</option>
+            <option value="HuggingFaceTB/SmolLM2-135M-Instruct">SmolLM2 135M Instruct (137 MB file, ~1.2 GB in use; phone default, weakest)</option>
+            <option value="onnx-community/Qwen2.5-0.5B-Instruct">Qwen2.5 0.5B Instruct (512 MB file, ~2 GB in use; best; too big for an iPhone 15)</option>
           </select></label>
         <label><input id="webgpu" type="checkbox"> Use WebGPU (experimental: on an iPhone 15 it was no faster than
           the CPU, often slower)</label>
         <label>Passages given to it <input id="passages" type="number" min="1" max="10" value="3"></label>
       </details>
+      <details id="budget" class="knobs"></details>
       <div id="answer" aria-live="polite"></div>
       <p id="answer-sources" class="fine"></p>
       <p id="answer-stats" class="fine">A small language model writes an answer from the passages below, on this
@@ -88,6 +91,6 @@
       }, 15000);
     })();
   </script>
-  <script type="module" src="app.js?v=7"></script>
+  <script type="module" src="app.js?v=9"></script>
 </body>
 </html>
