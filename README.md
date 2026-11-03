@@ -43,12 +43,24 @@ Wikipedia dump prefix (bz2)                           question
 Under the results, **Answer from these passages** writes a short answer from the top passages (3 by default) with a
 small instruct model, run by transformers.js in a module worker (`llm-worker.js`). Nothing leaves the browser.
 - **Backend:** WebAssembly on the CPU (q8) by default. On an iPhone 15, WebGPU was no faster and often slower, so it is an opt-in under *Answer settings* (q4f16, or q4 without `shader-f16`).
-- **Models:** Qwen2.5-0.5B-Instruct by default (~480–510 MB) or SmolLM2-360M-Instruct (~270–365 MB). Either
-  downloads once, on the first answer, and stays in the browser cache.
+- **Models:** SmolLM2-360M-Instruct by default (~365 MB), SmolLM2-135M-Instruct (~137 MB), or Qwen2.5-0.5B-Instruct
+  (~510 MB, the best answers). On an iPhone 15, Qwen ran out of WebAssembly memory. When a model runs out of memory,
+  the page closes that worker and steps down to the next smaller model. A model downloads once, on the first answer,
+  and stays in the browser cache.
 - **Sources:** small models cite unreliably, so the passages an answer was written from are always listed under it,
   linked to the numbered results. Any `[n]` the model writes is linked too.
 - **Speed:** in this repository's sandbox (4 slow cores, no GPU) the WebAssembly path takes about 35 s to the first
   word and produces 0.6 tokens/s. A phone with WebGPU is much faster; that is the case the feature is for.
+
+**Debug log.** Every stage worth knowing about is written to this browser's `localStorage` as it happens:
+- page start, the tables opening, each search with its bytes and memory
+- each model-load step, with download progress every 10% and the moment the inference session is created
+- each answer's first word and token counts
+- every error and status line
+
+A visit that ends in a crash keeps its log. On the next load a banner says so and offers **Copy debug report**. The
+*Debug log* button in the answer panel, the footer link, `?debug=1` or Shift+D open the log at any time. Nothing is
+sent anywhere. `tools/test_crash_log.cjs` crashes the renderer while the model loads and checks the report.
 
 `node tools/test_answer.cjs <nanolance>/wasm/test/range_server.py` checks it end to end: search, download the model,
 stream an answer that names the expected article, and list its sources.

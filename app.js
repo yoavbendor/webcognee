@@ -23,8 +23,21 @@ function dataBase() {
   return new URL('data/wiki/', location.href).href;
 }
 const BASE = dataBase();
+const D = window.wlDebug || { log() {}, span() { return () => {}; }, attachWorker() {}, mem() {} };
+
+// Storage the browser grants this site (the model cache lives in it) and the device's memory class, logged at the
+// points where memory matters.
+async function logMemory(where) {
+  const f = { where, deviceMemGB: navigator.deviceMemory, jsMB: D.mem() };
+  try {
+    const e = navigator.storage && navigator.storage.estimate ? await navigator.storage.estimate() : null;
+    if (e) { f.storageUsedBytes = e.usage; f.storageQuotaBytes = e.quota; }
+  } catch (err) { f.storageError = String(err); }
+  D.log('mem', f);
+}
 const $ = (id) => document.getElementById(id);
-const worker = new Worker('search-worker.js?v=6');
+const worker = new Worker('search-worker.js?v=7');
+D.attachWorker(worker, 'search');
 worker.onerror = (e) => status('The search worker failed to start: ' + (e.message || 'unknown error'), true);
 const pending = new Map();
 let nextId = 1;
@@ -54,6 +67,7 @@ worker.onmessage = (ev) => {
 
 function status(text, error) {
   window.webcogneeStarted = true;  // the watchdog in index.html stands down
+  D.log(error ? 'status.error' : 'status', { text });
   const el = $('status');
   el.textContent = text;
   el.classList.toggle('error', !!error);
@@ -92,6 +106,8 @@ async function runSearch(query) {
   status('Searching…');
   const nprobe = Number($('nprobe').value);
   const r = await call({ type: 'search', vector, k: 10, nprobe });
+  D.log('search', { q: query, nprobe, embedMs: Math.round(t1 - t0), ms: Math.round(r.ms), scanned: r.scanned,
+    req: r.stats.requests, bytes: r.stats.bytes, heapBytes: r.heap, top: r.hits[0] && r.hits[0].title });
   last = { query, hits: r.hits };
   const list = $('results');
   list.replaceChildren();
@@ -139,10 +155,19 @@ function llmCall(msg, onToken) {
 }
 
 function startLlm() {
-  llm = new Worker('llm-worker.js?v=6', { type: 'module' });
+  D.log('llm.stage', { what: 'worker.create' });
+  llm = new Worker('llm-worker.js?v=7', { type: 'module' });
+  D.attachWorker(llm, 'llm');
   llm.onerror = (e) => answerError(new Error('The answering worker failed to start: ' + (e.message || 'unknown')));
   llm.onmessage = (ev) => {
     const m = ev.data;
+    if (m.type === 'stage') {
+      const { type, ...fields } = m;
+      D.log(m.what === 'download' ? 'llm.progress' : 'llm.stage', fields);
+      if (m.what === 'session.creating') logMemory('before session');
+      return;
+    }
+    if (m.type === 'error') D.log('llm.error', { error: m.error });
     if (m.type === 'progress') {
       const mb = (n) => Math.round((n || 0) / 1e6);
       $('answer-stats').textContent = `Downloading the model (once, then cached): ${mb(m.loaded)} of ${mb(m.total)} MB`;
@@ -164,8 +189,9 @@ async function loadModel(model, webgpu) {
   if (llmModel === key) return;
   $('answer-stats').textContent = 'Loading the model…';
   const loaded = new Promise((resolve, reject) => llmPending.set('load', { resolve, reject }));
-  llm.postMessage({ type: 'load', model, webgpu });
+  llm.postMessage({ type: 'load', model, webgpu, simulateOom: new URLSearchParams(location.search).get('oom') });
   const m = await loaded;
+  logMemory('model loaded');
   llmModel = key;
   $('answer-stats').textContent = `Model ready (${m.device === 'webgpu' ? 'WebGPU' : 'WebAssembly, CPU'}, ${m.dtype}).`;
 }
@@ -185,16 +211,55 @@ function renderAnswer(text) {
 }
 
 function answerError(err) {
+  D.log('llm.error', { error: String((err && err.message) || err) });
   $('answer-stats').textContent = 'Could not answer: ' + ((err && err.message) || err);
   $('answer-stats').classList.add('error');
 }
 
+// Smaller models to step down to when one runs out of memory (an iPhone 15 could not load the 510 MB one).
+const SMALLER = {
+  'onnx-community/Qwen2.5-0.5B-Instruct': 'HuggingFaceTB/SmolLM2-360M-Instruct',
+  'HuggingFaceTB/SmolLM2-360M-Instruct': 'HuggingFaceTB/SmolLM2-135M-Instruct',
+};
+
+function outOfMemory(err) {
+  return /out of memory|RangeError|Aborted\(\)|memory access out of bounds|could not allocate/i.test(String((err && err.message) || err));
+}
+
+// A worker whose WebAssembly memory could not grow keeps that memory: it is closed, and a new one starts clean.
+function discardLlm() {
+  if (llm) llm.terminate();
+  llm = null;
+  llmModel = null;
+  llmPending.clear();
+}
+
+async function loadModelSteppingDown(webgpu) {
+  for (;;) {
+    const model = $('model').value;
+    try {
+      await loadModel(model, webgpu);
+      return model;
+    } catch (err) {
+      const smaller = SMALLER[model];
+      D.log('llm.error', { what: 'load.failed', model, oom: outOfMemory(err), next: smaller, error: String((err && err.message) || err) });
+      if (!outOfMemory(err) || !smaller) throw err;
+      discardLlm();
+      $('model').value = smaller;
+      $('answer-stats').textContent = `${model.split('/')[1]} ran out of memory on this device; trying ${smaller.split('/')[1]}…`;
+    }
+  }
+}
+
 async function answer() {
   if (!last) return;
+  D.log('llm.stage', { what: 'answer.click', model: $('model').value, webgpu: $('webgpu').checked });
+  $('model').dataset.asked = $('model').value;
   $('answer-stats').classList.remove('error');
   $('ask').disabled = true;
   try {
-    await loadModel($('model').value, $('webgpu').checked);
+    const model = await loadModelSteppingDown($('webgpu').checked);
+    if (model !== $('model').dataset.asked && $('model').dataset.asked) D.log('llm.stage', { what: 'stepped.down', to: model });
     const n = Number($('passages').value);
     const messages = [
       { role: 'system', content: SYSTEM },
@@ -236,6 +301,8 @@ async function showArticle(id) {
 }
 
 async function main() {
+  D.log('stage', { what: 'main.begin', base: BASE });
+  logMemory('start');
   status('Reading the corpus description…');
   const res = await fetch(BASE + 'meta.json');
   if (!res.ok) throw new Error(`data/wiki/meta.json: HTTP ${res.status}`);
@@ -245,7 +312,9 @@ async function main() {
   worker.postMessage({ type: 'init', base: BASE });
   let transformers;
   try {
+    const end = D.span('stage', { what: 'transformers.import' });
     transformers = await import(TRANSFORMERS);
+    end();
   } catch (err) {
     throw new Error('Could not load transformers.js from cdn.jsdelivr.net (blocked, offline, or this browser cannot ' +
       'run it): ' + ((err && err.message) || err));
@@ -260,7 +329,11 @@ async function main() {
     } }).catch((err) => {
     throw new Error('Could not load the embedding model from huggingface.co: ' + ((err && err.message) || err));
   });
+  const endEmbed = D.span('stage', { what: 'embedder.load', model: meta.model.queries });
   const [init, extractor] = await Promise.all([initReady, model]);
+  endEmbed();
+  D.log('stage', { what: 'tables.open', ok: init.ok, ms: init.ms, req: init.stats && init.stats.requests,
+    bytes: init.stats && init.stats.bytes, heapBytes: init.heap });
   if (!init.ok) throw new Error(init.error);
   embed = extractor;
   $('q').disabled = false;
@@ -270,6 +343,7 @@ async function main() {
   if (preset) { $('q').value = preset; runSearch(preset); }
 }
 
+$('show-debug').addEventListener('click', () => D.showPanel && D.showPanel());
 $('ask').addEventListener('click', () => answer().catch((err) => answerError(err)));
 $('form').addEventListener('submit', (e) => { e.preventDefault(); runSearch($('q').value).catch((err) => status(String(err), true)); });
 for (const b of document.querySelectorAll('.example')) {

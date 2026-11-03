@@ -3,12 +3,12 @@
 //
 // The on-device answer, end to end in headless Chromium (WebAssembly: no GPU here): search, load the model, stream an
 // answer, check it names the expected thing and lists the passages it came from.
-//   node tools/test_answer.cjs <range_server.py> [model]
+//   node tools/test_answer.cjs <range_server.py> [model] [page query, e.g. oom=<model> to test the step-down]
 const { chromium } = require('playwright');
 const { spawn } = require('child_process');
 const path = require('path');
 
-const [server, model] = process.argv.slice(2);
+const [server, model, query] = process.argv.slice(2);
 const root = path.resolve(__dirname, '..');
 const CASES = [{ q: 'which philosopher tutored Alexander the Great', expect: /Aristotle/ }];
 
@@ -21,9 +21,9 @@ const CASES = [{ q: 'which philosopher tutored Alexander the Great', expect: /Ar
   pg.on('pageerror', (e) => console.log('pageerror', e.message));
   let failed = 0;
   try {
-    await pg.goto(`http://127.0.0.1:${port}/index.html`);
+    await pg.goto(`http://127.0.0.1:${port}/index.html${query ? '?' + query : ''}`);
     await pg.waitForFunction(() => /^Ready/.test(document.getElementById('status').textContent), null, { timeout: 600000 });
-    if (model) await pg.selectOption('#model', model);
+    if (model) await pg.evaluate((m) => { document.getElementById('model').value = m; }, model);  // inside closed <details>
     for (const c of CASES) {
       await pg.fill('#q', c.q);
       await pg.click('#go');
@@ -37,6 +37,7 @@ const CASES = [{ q: 'which philosopher tutored Alexander the Great', expect: /Ar
       const cites = await pg.$$eval('#answer .cite, #answer-sources .cite', (e) => e.length);
       const ok = c.expect.test(text) && cites > 0;
       if (!ok) failed++;
+      console.log('  model used:', await pg.inputValue('#model'));
       console.log(`${ok ? 'ok  ' : 'FAIL'} "${c.q}" in ${Math.round((Date.now() - t0) / 1000)} s\n  answer: ${text}\n  ${stats}\n  citations: ${cites}`);
     }
   } finally {
