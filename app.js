@@ -288,7 +288,8 @@ function showBudget() {
 // ---------------------------------------------------------------------------------------------- answers
 
 const SYSTEM = 'You are a helpful assistant. Answer questions from the Wikipedia passages the user gives you, ' +
-  'and cite the passage numbers you used, like [1].';
+  'and cite the passage numbers you used, like [1]. If the passages are about something other than what the ' +
+  'question asks about, say that they do not answer it.';
 
 // Small models follow a prompt that states the question before the passages and asks it again after them.
 function prompt(query, hits) {
@@ -363,16 +364,36 @@ async function loadModelSteppingDown(webgpu) {
   }
 }
 
-async function answer() {
+
+// The passages are about something else (answer-guard.js): say so instead of letting the model answer from them.
+function declineOffTopic(guard) {
+  D.log('ai.stage', { what: 'answer.declined', terms: guard.terms.join(' '), missing: guard.missing.join(' ') });
+  const words = guard.missing.map((w) => `"${w}"`).join(', ');
+  $('answer').replaceChildren();
+  $('answer-sources').replaceChildren();
+  $('answer-stats').classList.remove('error');
+  $('answer-stats').replaceChildren(
+    `None of the passages mention ${words}: the indexed articles do not seem to cover this question, so no answer ` +
+    'was written. ',
+    el('button', { class: 'quiet', onclick: () => answer(true).catch((err) => answerError(err)) }, 'Answer anyway'));
+}
+
+async function answer(force = false) {
   if (!last) return;
   D.log('ai.stage', { what: 'answer.click', model: $('model').value, webgpu: $('webgpu').checked });
   $('answer-stats').classList.remove('error');
   $('ask').disabled = true;
   try {
+    const n = Number($('passages').value);
+    // before the model loads: a question the passages do not cover costs no download
+    const guard = window.answerGuard.check(last.query, last.hits.map((h) => h.text));
+    if (guard.offTopic && !force) {
+      declineOffTopic(guard);
+      return;
+    }
     const asked = $('model').value;
     const model = await loadModelSteppingDown($('webgpu').checked);
     if (model !== asked) D.log('ai.stage', { what: 'stepped.down', from: asked, to: model });
-    const n = Number($('passages').value);
     const messages = [
       { role: 'system', content: SYSTEM },
       { role: 'user', content: prompt(last.query, last.hits.slice(0, n)) },

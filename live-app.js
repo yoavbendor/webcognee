@@ -562,7 +562,8 @@ function showBudget() {
 // ---------------------------------------------------------------------------------------------- answers
 
 const SYSTEM = 'You are a helpful assistant. Answer questions from the Wikipedia passages the user gives you, ' +
-  'and cite the passage numbers you used, like [1].';
+  'and cite the passage numbers you used, like [1]. If the passages are about something other than what the ' +
+  'question asks about, say that they do not answer it.';
 
 // passages: [{n, title, section, heading, text}]; the numbers are the results' numbers on the page.
 function prompt(query, passages) {
@@ -638,7 +639,21 @@ async function loadModelSteppingDown(webgpu) {
 
 // The answer reads the live texts of the first N results, once they have arrived. A result that could not be fetched
 // is left out and named; with none, there is nothing to answer from.
-async function answer() {
+
+// The passages are about something else (answer-guard.js): say so instead of letting the model answer from them.
+function declineOffTopic(guard) {
+  D.log('ai.stage', { what: 'answer.declined', terms: guard.terms.join(' '), missing: guard.missing.join(' ') });
+  const words = guard.missing.map((w) => `"${w}"`).join(', ');
+  $('answer').replaceChildren();
+  $('answer-sources').replaceChildren();
+  $('answer-stats').classList.remove('error');
+  $('answer-stats').replaceChildren(
+    `None of the passages mention ${words}: the indexed articles do not seem to cover this question, so no answer ` +
+    'was written. ',
+    el('button', { class: 'quiet', onclick: () => answer(true).catch((err) => answerError(err)) }, 'Answer anyway'));
+}
+
+async function answer(force = false) {
   if (!last) return;
   D.log('ai.stage', { what: 'answer.click', model: $('model').value, webgpu: $('webgpu').checked });
   $('answer-stats').classList.remove('error');
@@ -651,6 +666,12 @@ async function answer() {
     const usable = top.filter((h) => h.state === 'live' || h.state === 'unlocated');
     const skipped = top.length - usable.length;
     if (!usable.length) throw new Error('none of these passages could be fetched from Wikipedia');
+    // every result's live text that has arrived, not only those given to the model
+    const guard = window.answerGuard.check(last.query, last.hits.filter((h) => h.text).map((h) => h.text));
+    if (guard.offTopic && !force) {
+      declineOffTopic(guard);
+      return;
+    }
     const asked = $('model').value;
     const model = await loadModelSteppingDown($('webgpu').checked);
     if (model !== asked) D.log('ai.stage', { what: 'stepped.down', from: asked, to: model });
