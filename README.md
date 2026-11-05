@@ -81,6 +81,49 @@ sent anywhere. `tools/test_crash_log.cjs` crashes the renderer while the model l
 `node tools/test_answer.cjs <nanolance>/wasm/test/range_server.py` checks it end to end: search, download the model,
 stream an answer that names the expected article, and list its sources.
 
+## Live Wikipedia: indexes here, text from Wikipedia (`live.html`)
+
+https://yoavbendor.github.io/webcognee/live.html searches **10,000 articles** (71,868 passages, 148,831 links
+between them) but this site stores **no article text**. The bundle (`data/wiki10k/`, 59 MB, almost all of it
+vectors) holds:
+- per passage: its vector, article, MediaWiki section number, position in the section, word count, and an
+  anchor of its first 12 words;
+- per article: title, page ID and the **revision ID** that was indexed, categories and links.
+
+A result's text is fetched live, at most three requests at a time, from
+`en.wikipedia.org/w/api.php?action=parse&oldid=<revision>&section=<n>`: exactly the revision that was indexed.
+The page finds the passage in that section by its anchor. One more request checks whether each result's article
+has been edited since, and if so marks it "edited since indexing" with a link to the current page. Answers are
+written from the fetched texts by the same on-device model as the offline page.
+
+**Privacy.** Your question never leaves the device, but Wikipedia learns which articles and sections your
+results are in.
+
+**Built with cognee and nanolance.** `pipeline/build_wiki_live.py`:
+1. Streams the first 10,000 articles of the 2026-10-01 dump, keeping revision IDs and MediaWiki section numbers.
+2. Stores them through a cognee custom pipeline with no LLM: `WikiArticle` and `WikiPassage` DataPoints and
+   `links_to` edges. Cognee writes the graph to Ladybug and the vectors to LanceDB served by nanolance
+   (`install_as_lancedb`), embedding with fastembed's bge-small.
+3. Exports the bundle from cognee's own stores.
+
+The full build took 75 minutes on this sandbox's 4 cores, 71 of them in cognee's embedding and storage. Its
+`--verify` check matched the section numbers Wikipedia's API reports, 100 of 100.
+
+```sh
+PYTHONPATH=<dir with a sitecustomize.py calling nanolance.lancedb.install_as_lancedb()> \
+python pipeline/build_wiki_live.py --dump head192.xml.bz2 --articles 10000 --max-passages 8 \
+  --out data/wiki10k --work <cognee work dir> --verify 10
+```
+
+**Search quality.** The partitioned search reads 6 of 268 partitions (about 1.2 MB). Measured against exact
+search over all passages, it finds 89% of the exact top 10 at 6 partitions, 95% at 12 and 99% at 24. The number is
+adjustable under *Search settings*.
+
+**Test:** `LIVE_DATA=data/wiki10k/ node tools/test_live.cjs <nanolance>/wasm/test/range_server.py`. It runs three
+questions and checks that every result shows live text located at its anchor (30 of 30). Wikipedia throttles
+shared IPs (HTTP 429); the page waits for `Retry-After` and retries, and the test reports throttling rather than
+hiding it.
+
 ## Build the corpus
 
 ```sh

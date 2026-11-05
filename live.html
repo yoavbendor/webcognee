@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pocket Wikipedia, live</title>
+  <meta name="description" content="Semantic search over 10,000 English Wikipedia articles: the index runs on this device, and each result's text is fetched live from en.wikipedia.org at the revision that was indexed.">
+  <link rel="stylesheet" href="style.css">
+  <style>
+    /* the live page's own rules; the rest comes from style.css */
+    .hit .placeholder, .hit .live, .hit .failed { margin: 6px 0; }
+    .hit .placeholder { color: var(--muted); font-style: italic; }
+    .hit .failed, #article .failed { color: var(--error); }
+    .hit .meta { margin: 4px 0 0; }
+    .hit .meta a { font-size: 0.85rem; }
+    .hit .badge { color: var(--error); font-size: 0.85rem; margin: 4px 0; }
+    .hit .retry { font-size: 0.85rem; padding: 2px 8px; margin-left: 4px; }
+    #article .lead { white-space: pre-wrap; }
+    #article .placeholder { color: var(--muted); font-style: italic; }
+    .wiki-line { color: var(--muted); font-size: 0.85rem; margin: 2px 0; }
+    .wiki-note { border: 1px solid var(--line); border-left: 3px solid var(--error); border-radius: 8px;
+      padding: 6px 10px; font-size: 0.85rem; background: var(--card); }
+    .back { margin: 4px 0 0; }
+    .hit[data-state="failed"] { border-color: var(--error); }
+  </style>
+  <script src="memprobe.js?v=10"></script>
+  <script src="debug.js?v=10"></script>
+</head>
+<body>
+  <header>
+    <h1>Pocket Wikipedia, live</h1>
+    <p class="tag">Ask in your own words. The index of 10,000 articles is searched on this device. The text of each result
+      is then fetched from Wikipedia, at the revision that was indexed.</p>
+    <p id="corpus" class="fine"></p>
+    <p id="build" class="fine"></p>
+    <p class="back fine"><a href="index.html">The offline page (300 articles, text in the bundle)</a></p>
+  </header>
+  <main>
+    <form id="form">
+      <input id="q" type="search" placeholder="Ask anything about the articles…" autocomplete="off" disabled>
+      <button id="go" disabled>Search</button>
+    </form>
+    <div class="examples">
+      <button class="example" type="button">who was the first person to walk on the moon</button>
+      <button class="example" type="button">which metal is refined from bauxite</button>
+      <button class="example" type="button">which philosopher tutored Alexander the Great</button>
+      <button class="example" type="button">an animal that eats termites at night</button>
+    </div>
+    <details class="knobs">
+      <summary>Search settings</summary>
+      <label>Partitions read per question <input id="nprobe" type="number" min="1" max="64" value="6"></label>
+    </details>
+    <p id="status" class="fine" role="status">Loading…</p>
+    <p id="wiki-status" class="wiki-line">Live from Wikipedia: no requests yet</p>
+    <p id="wiki-note" class="wiki-note" hidden></p>
+    <section id="answer-box" hidden>
+      <div class="answer-head">
+        <button id="ask" type="button">Answer from these passages</button>
+        <button id="show-debug" type="button" class="quiet">Debug log</button>
+        <label class="fine"><input id="auto-answer" type="checkbox"> answer every question</label>
+      </div>
+      <details class="knobs">
+        <summary>Answer settings</summary>
+        <label>Model
+          <select id="model">
+            <option value="HuggingFaceTB/SmolLM2-360M-Instruct" selected>SmolLM2 360M Instruct (365 MB file, ~1.6 GB in use; desktop default)</option>
+            <option value="HuggingFaceTB/SmolLM2-135M-Instruct">SmolLM2 135M Instruct (137 MB file, ~1.2 GB in use; phone default, weakest)</option>
+            <option value="onnx-community/Qwen2.5-0.5B-Instruct">Qwen2.5 0.5B Instruct (512 MB file, ~2 GB in use; best; too big for an iPhone 15)</option>
+          </select></label>
+        <label><input id="webgpu" type="checkbox"> Use WebGPU (experimental: on an iPhone 15 it was no faster than
+          the CPU, often slower)</label>
+        <label>Passages given to it (their live text is fetched first) <input id="passages" type="number" min="1" max="10" value="3"></label>
+      </details>
+      <details id="budget" class="knobs"></details>
+      <div id="answer" aria-live="polite"></div>
+      <p id="answer-sources" class="fine"></p>
+      <p id="answer-stats" class="fine">A small language model writes an answer from the passages' live text, on this
+        device: it downloads once (several hundred MB, then cached). The question and the passages' text go nowhere else.</p>
+    </section>
+    <ol id="results"></ol>
+    <section id="article" hidden></section>
+  </main>
+  <footer class="fine">
+    <p>How it works: the index holds, for each passage, its embedding (bge-small-en-v1.5), the article, the section number,
+      and the passage's first twelve words. It was built with <a href="https://github.com/topoteretes/cognee">cognee</a>
+      and is stored as <a href="https://lance.org/format/">Lance</a> tables; no passage text is in the bundle.
+      Your question is embedded here with the same model (transformers.js), and
+      <a href="https://github.com/yoavbendor/nanolance">nanolance</a>'s WebAssembly reader fetches only the nearest
+      partitions' rows by HTTP Range from this static site.</p>
+    <p><strong>Searching contacts Wikipedia.</strong> Unlike the offline page, each result's text is requested from
+      en.wikipedia.org by its pinned revision and section, at most three requests at a time, and the page then checks
+      the results' revisions for later edits. Your question never leaves this device, but Wikipedia does learn which
+      articles and sections your results are in. Wikipedia's text is not stored by this site.</p>
+    <p>Text from <a href="https://en.wikipedia.org/">Wikipedia</a>, live from the revision the index was built from,
+      <a href="https://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a>; each title links to its article.
+      Code: <a href="https://github.com/yoavbendor/webcognee">webcognee</a> (Apache-2.0),
+      <a href="LICENSE-NOTICES.md">third-party notices</a>.</p>
+  </footer>
+  <script>
+    // A classic script, so it runs even where the page's own script cannot: it reports errors and, if the page never
+    // starts, says so instead of leaving "Loading…" on screen.
+    (function () {
+      function show(text) {
+        var el = document.getElementById('status');
+        el.textContent = text;
+        el.className = 'fine error';
+      }
+      window.addEventListener('error', function (e) { show('Error: ' + (e.message || e.type)); });
+      window.addEventListener('unhandledrejection', function (e) {
+        show('Error: ' + ((e.reason && e.reason.message) || e.reason));
+      });
+      setTimeout(function () {
+        if (!window.webcogneeStarted) {
+          show('The page did not start. This browser may lack ES modules or WebAssembly, or a content blocker stopped ' +
+            'a script. Try a current Chrome, Edge, Firefox or Safari.');
+        }
+      }, 15000);
+    })();
+  </script>
+  <script src="live-app.js?v=1"></script>
+</body>
+</html>
