@@ -381,6 +381,11 @@ function kb(bytes) {
   return bytes >= 1 << 20 ? (bytes / (1 << 20)).toFixed(1) + ' MB' : Math.max(1, Math.round(bytes / 1024)) + ' KB';
 }
 
+// replaceChildren with null children skipped, as el() skips them (the DOM would print "null")
+function setChildren(node, ...children) {
+  node.replaceChildren(...children.filter((c) => c != null));
+}
+
 function el(tag, attrs, ...children) {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs || {})) {
@@ -444,7 +449,7 @@ function paintHit(h) {
     el('a', { href: `https://en.wikipedia.org/?curid=${h.page_id}`, target: '_blank', rel: 'noopener' }, 'current page')) : null;
   const anchorHref = `https://en.wikipedia.org/w/index.php?oldid=${h.revid}` +
     (h.heading && h.heading.id ? '#' + encodeURIComponent(h.heading.id) : '');
-  li.replaceChildren(
+  setChildren(li, 
     el('span', { class: 'num' }, `[${h.n}] `),
     el('button', { class: 'title', onclick: () => showArticle(h.article) }, h.title),
     sectionName ? el('span', { class: 'section' }, ' › ' + sectionName) : null,
@@ -544,7 +549,7 @@ async function runSearch(query) {
 
 function showBudget() {
   const b = budget($('model').value);
-  $('budget').replaceChildren(
+  setChildren($('budget'), 
     el('summary', {}, `Memory with this model: ~${(b.rss / 1024).toFixed(1)} GB, ~${(b.rssPeak / 1024).toFixed(1)} GB while it loads`),
     el('table', {}, el('tr', {}, el('th', {}, 'part'), el('th', {}, 'MB'), el('th', {}, 'loading')),
       ...b.rows.map((r) => el('tr', {}, el('td', {}, r[0]), el('td', {}, String(r[1])), el('td', {}, String(r[2])))),
@@ -681,7 +686,7 @@ async function showArticle(id) {
   const a = r.article;
   const panel = $('article');
   const lead = el('p', { class: 'placeholder' }, 'fetching the lead from Wikipedia…');
-  panel.replaceChildren(
+  setChildren(panel, 
     el('h2', {}, el('a', { href: a.url, target: '_blank', rel: 'noopener' }, a.title)),
     lead,
     a.categories ? el('p', { class: 'cats' }, a.categories.split('; ').slice(0, 12).join(' · ')) : null,
